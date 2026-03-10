@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Light Bending — Dark Matter Halo</title>
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=EB+Garamond:ital,wght@0,400;1,400&display=swap" rel="stylesheet">
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+html, body {
+  width:100vw; height:100vh;
+  background:#000;
+  overflow:hidden;
+}
+canvas {
+  position:fixed; top:0; left:0;
+  width:100vw; height:100vh;
+}
+#hud {
+  position:fixed; top:0; left:0;
+  width:100vw; height:100vh;
+  pointer-events:none;
+  z-index:10;
+}
+#title {
+  position:absolute;
+  top:28px; left:36px;
+  font-family:'EB Garamond', serif;
+  font-size:20px;
+  font-weight:400;
+  letter-spacing:5px;
+  text-transform:uppercase;
+  color:rgba(255,255,255,0.75);
+}
+#title em {
+  font-style:italic;
+  color:rgba(120,190,255,0.65);
+}
+#subtitle {
+  position:absolute;
+  top:56px; left:37px;
+  font-family:'Share Tech Mono', monospace;
+  font-size:8px;
+  letter-spacing:3px;
+  text-transform:uppercase;
+  color:rgba(80,130,200,0.45);
+}
+#readout {
+  position:absolute;
+  top:28px; right:32px;
+  text-align:right;
+  font-family:'Share Tech Mono', monospace;
+  font-size:8px;
+  letter-spacing:1px;
+  line-height:2.2;
+  color:rgba(60,110,180,0.5);
+}
+#readout span { color:rgba(100,200,255,0.75); }
+#phase-label {
+  position:absolute;
+  bottom:36px; left:50%;
+  transform:translateX(-50%);
+  font-family:'Share Tech Mono', monospace;
+  font-size:9px;
+  letter-spacing:4px;
+  text-transform:uppercase;
+  color:rgba(100,200,255,0.5);
+  text-align:center;
+  transition:opacity 0.5s;
+}
+#controls {
+  position:absolute;
+  bottom:28px; right:32px;
+  display:flex; gap:10px;
+  align-items:center;
+  pointer-events:all;
+}
+.btn {
+  font-family:'Share Tech Mono', monospace;
+  font-size:8px;
+  letter-spacing:2px;
+  text-transform:uppercase;
+  color:rgba(100,200,255,0.6);
+  border:1px solid rgba(100,200,255,0.25);
+  background:transparent;
+  padding:6px 12px;
+  cursor:pointer;
+  transition:all 0.2s;
+}
+.btn:hover { color:rgba(100,200,255,1); border-color:rgba(100,200,255,0.6); }
+.ctrl-row {
+  display:flex; align-items:center; gap:8px;
+}
+.ctrl-row label {
+  font-family:'Share Tech Mono', monospace;
+  font-size:8px;
+  letter-spacing:2px;
+  text-transform:uppercase;
+  color:rgba(60,110,180,0.5);
+}
+input[type=range] {
+  -webkit-appearance:none;
+  width:70px; height:1px;
+  background:rgba(100,150,220,0.3);
+  outline:none; cursor:pointer;
+}
+input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance:none;
+  width:8px; height:8px;
+  border-radius:50%;
+  background:rgba(100,200,255,0.8);
+  cursor:pointer;
+}
+.cv { font-family:'Share Tech Mono',monospace; font-size:8px; color:rgba(100,200,255,0.6); min-width:24px; }
+
+/* Annotation lines */
+.ann-line {
+  position:absolute;
+  pointer-events:none;
+}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud">
+  <div id="title">Light Bending Near a <em>Dark Matter</em> Halo</div>
+  <div id="subtitle">NFW Gravitational Lens · Ray Tracing Simulation</div>
+  <div id="readout">
+    NFW CONCENTRATION &nbsp;<span id="r-c">10</span><br>
+    HALO MASS &nbsp;<span id="r-m">10¹²</span> M☉<br>
+    DEFLECTION MAX &nbsp;<span id="r-def">—</span> arcsec<br>
+    RAYS TRACED &nbsp;<span id="r-rays">—</span><br>
+    EINSTEIN RADIUS &nbsp;<span id="r-ein">—</span> kpc
+  </div>
+  <div id="phase-label" id="phase-label">Approaching</div>
+  <div id="controls">
+    <div class="ctrl-row">
+      <label>Speed</label>
+      <input type="range" id="sl-speed" min="0.2" max="4" step="0.1" value="1">
+      <span class="cv" id="v-speed">1×</span>
+    </div>
+    <div class="ctrl-row">
+      <label>Mass</label>
+      <input type="range" id="sl-mass" min="1" max="20" step="0.5" value="8">
+      <span class="cv" id="v-mass">8</span>
+    </div>
+    <div class="ctrl-row">
+      <label>Rays</label>
+      <input type="range" id="sl-rays" min="5" max="60" step="1" value="28">
+      <span class="cv" id="v-rays">28</span>
+    </div>
+    <button class="btn" id="btn-reset">RESET</button>
+  </div>
+</div>
+
+<script>
+// ══════════════════════════════════════════════════════
+//  SETUP
+// ══════════════════════════════════════════════════════
+const canvas = document.getElementById('c');
+const ctx    = canvas.getContext('2d');
+let W, H, CX, CY;
+
+function resize() {
+  W  = canvas.width  = window.innerWidth;
+  H  = canvas.height = window.innerHeight;
+  CX = W / 2; CY = H / 2;
+}
+resize();
+window.addEventListener('resize', () => { resize(); resetSim(); });
+
+// ══════════════════════════════════════════════════════
+//  SIMULATION PARAMS
+// ══════════════════════════════════════════════════════
+let SPEED      = 1.0;
+let DM_MASS    = 8.0;
+let N_RAYS     = 28;
+const G        = 1.0;
+const C_NFW    = 10;
+const R200     = Math.min(W, H) * 0.22;  // virial radius in px
+
+function getRS() { return R200 / C_NFW; }
+function getEinsteinR() { return getRS() * Math.sqrt(DM_MASS * 0.4); }
+
+// NFW deflection magnitude (pixels)
+function nfwDeflect(impact, mass) {
+  const rs = getRS();
+  const x  = impact / rs;
+  if (x < 1e-4) return 0;
+  let f;
+  if (x < 0.999)      f = Math.log(x/2) + 1/Math.sqrt(1-x*x);
+  else if (x < 1.001) f = 1 + Math.LN2;
+  else { const s = Math.sqrt(x*x-1); f = Math.log(x/2) + Math.atan(s/(x+1)) * 2 / s; }
+  return mass * 55 * Math.max(0, f) / (impact + 1e-6);
+}
+
+// ══════════════════════════════════════════════════════
+//  STARS (background field)
+// ══════════════════════════════════════════════════════
+let stars = [];
+function genStars(n = 600) {
+  stars = [];
+  for (let i = 0; i < n; i++) {
+    const t = Math.random();
+    const col = t < 0.5  ? [255,255,255]
+              : t < 0.7  ? [200,220,255]
+              : t < 0.85 ? [255,240,200]
+              :             [180,200,255];
+    stars.push({
+      x: Math.random() * W,
+      y: Math.random() * H,
+      r: Math.random() < 0.05 ? Math.random()*1.5+0.8 : Math.random()*0.7+0.2,
+      a: 0.3 + Math.random()*0.7,
+      col,
+      twink: Math.random() * Math.PI * 2,
+      twinkSpeed: 0.005 + Math.random()*0.02,
+    });
+  }
+}
+
+// ══════════════════════════════════════════════════════
+//  RAY DEFINITION
+// ══════════════════════════════════════════════════════
+// Each ray travels from left → right.
+// It is a bundle of photons shot in parallel from x=-offscreen
+// with impact parameters spread around the halo.
+// We numerically integrate the path using the NFW deflection field.
+
+const STEP   = 3;        // integration step in px
+const TRAIL  = 800;      // max trail history length
+
+function makeRay(impactY, index, total) {
+  // Start far left
+  const startX = -80;
+  const startY = CY + impactY;
+
+  // Color: rays near Einstein radius get brighter, more blue-white
+  const distToEin = Math.abs(Math.abs(impactY) - getEinsteinR());
+  const tColor    = Math.exp(-distToEin / (getEinsteinR() * 0.5));
+  const r = Math.round(180 + 75 * tColor);
+  const g = Math.round(210 + 45 * tColor);
+  const b = 255;
+  const alpha = 0.25 + 0.65 * tColor;
+
+  return {
+    x: startX, y: startY,
+    vx: 1, vy: 0,          // initial direction
+    trail: [],
+    impact: impactY,        // signed impact parameter
+    color: [r, g, b],
+    alpha,
+    done: false,
+    index,
+    deflectionAccum: 0,     // total bend accumulated
+    maxDeflect: 0,
+  };
+}
+
+let rays = [];
+let globalT = 0;
+let animId  = null;
+
+function resetSim() {
+  cancelAnimationFrame(animId);
+  globalT = 0;
+  rays    = [];
+
+  const half = Math.floor(N_RAYS / 2);
+  // Impact parameters: spread from -2*R200 to +2*R200, denser near Einstein radius
+  for (let i = -half; i <= half; i++) {
+    if (i === 0 && N_RAYS % 2 === 0) continue;
+    // Nonlinear spacing — more rays near center
+    const t    = i / half;
+    const sign = t >= 0 ? 1 : -1;
+    const impact = sign * R200 * 1.6 * Math.pow(Math.abs(t), 0.7);
+    rays.push(makeRay(impact, i + half, N_RAYS));
+  }
+
+  document.getElementById('r-rays').textContent   = rays.length;
+  document.getElementById('r-c').textContent       = C_NFW;
+  document.getElementById('r-m').textContent       = DM_MASS.toFixed(1) + '×10¹²';
+  document.getElementById('r-ein').textContent     = (getEinsteinR() / 10).toFixed(1);
+
+  requestAnimationFrame(loop);
+}
+
+// ══════════════════════════════════════════════════════
+//  PHYSICS: integrate ray deflection
+// ══════════════════════════════════════════════════════
+function stepRay(ray) {
+  if (ray.done) return;
+
+  // Move
+  ray.x += ray.vx * STEP * SPEED;
+  ray.y += ray.vy * STEP * SPEED;
+
+  // Record trail
+  ray.trail.push({ x: ray.x, y: ray.y });
+  if (ray.trail.length > TRAIL) ray.trail.shift();
+
+  // Compute deflection from halo at current position
+  const dx   = ray.x - CX;
+  const dy   = ray.y - CY;
+  const dist = Math.sqrt(dx*dx + dy*dy);
+
+  if (dist > 1) {
+    // NFW deflection magnitude
+    const alpha = nfwDeflect(dist, DM_MASS);
+    // Direction: bend toward halo center
+    const nx = -dx / dist;
+    const ny = -dy / dist;
+
+    // Apply perpendicular (transverse) component of deflection to velocity
+    // Only the component perpendicular to motion
+    const vLen = Math.sqrt(ray.vx*ray.vx + ray.vy*ray.vy);
+    const vxN  = ray.vx / vLen;
+    const vyN  = ray.vy / vLen;
+    // Transverse direction
+    const tpx  = -vyN, tpy = vxN;
+    const tComp = nx*tpx + ny*tpy;
+    const bend  = alpha * 0.0012 * STEP;
+    ray.vy += bend * tComp * tpy * 1.8;
+    ray.vx += bend * tComp * tpx * 1.8;
+
+    // Renormalise (light travels at c)
+    const newLen = Math.sqrt(ray.vx*ray.vx + ray.vy*ray.vy);
+    ray.vx /= newLen; ray.vy /= newLen;
+
+    ray.deflectionAccum += Math.abs(bend * tComp);
+    if (ray.deflectionAccum > ray.maxDeflect) ray.maxDeflect = ray.deflectionAccum;
+  }
+
+  // Done when off screen
+  if (ray.x > W + 80 || ray.y < -H || ray.y > H * 2) ray.done = true;
+}
+
+// ══════════════════════════════════════════════════════
+//  DRAW HELPERS
+// ══════════════════════════════════════════════════════
+function drawStarField(t) {
+  for (const s of stars) {
+    const tw = 0.75 + 0.25 * Math.sin(t * s.twinkSpeed + s.twink);
+    const a  = s.a * tw;
+    ctx.fillStyle = `rgba(${s.col[0]},${s.col[1]},${s.col[2]},${a.toFixed(3)})`;
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, s.r, 0, Math.PI*2);
+    ctx.fill();
+    if (s.r > 1) {
+      const g = ctx.createRadialGradient(s.x,s.y,0,s.x,s.y,s.r*4);
+      g.addColorStop(0, `rgba(${s.col[0]},${s.col[1]},${s.col[2]},${(a*0.3).toFixed(3)})`);
+      g.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(s.x,s.y,s.r*4,0,Math.PI*2); ctx.fill();
+    }
+  }
+}
+
+function drawDMHalo() {
+  // The halo is invisible — only draw a faint gravitational well distortion
+  // as an extremely subtle blue-black depression
+  const rE = getEinsteinR();
+  const rs = getRS();
+
+  // Deep void at core
+  const voidGrad = ctx.createRadialGradient(CX,CY,0, CX,CY, rs*0.7);
+  voidGrad.addColorStop(0,   'rgba(0,0,3,0.97)');
+  voidGrad.addColorStop(0.4, 'rgba(0,0,2,0.75)');
+  voidGrad.addColorStop(0.8, 'rgba(0,0,1,0.3)');
+  voidGrad.addColorStop(1,   'rgba(0,0,0,0)');
+  ctx.fillStyle = voidGrad;
+  ctx.beginPath();
+  ctx.arc(CX, CY, rs * 0.7, 0, Math.PI*2);
+  ctx.fill();
+
+  // Outer halo fade — just darkness
+  const haloGrad = ctx.createRadialGradient(CX,CY, rs*0.5, CX,CY, R200*1.1);
+  haloGrad.addColorStop(0,   'rgba(0,0,0,0.15)');
+  haloGrad.addColorStop(0.5, 'rgba(0,0,0,0.06)');
+  haloGrad.addColorStop(1,   'rgba(0,0,0,0)');
+  ctx.fillStyle = haloGrad;
+  ctx.beginPath();
+  ctx.arc(CX, CY, R200 * 1.1, 0, Math.PI*2);
+  ctx.fill();
+
+  // Einstein ring — faint dashed circle where lensing is maximum
+  ctx.strokeStyle = 'rgba(60,120,200,0.08)';
+  ctx.lineWidth = 0.8;
+  ctx.setLineDash([5,8]);
+  ctx.beginPath();
+  ctx.arc(CX, CY, rE, 0, Math.PI*2);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Tiny central dot annotation (almost invisible)
+  ctx.fillStyle = 'rgba(30,60,120,0.12)';
+  ctx.beginPath();
+  ctx.arc(CX, CY, 2.5, 0, Math.PI*2);
+  ctx.fill();
+
+  // Annotation text — understated
+  ctx.font = '8px "Share Tech Mono", monospace';
+  ctx.fillStyle = 'rgba(50,90,160,0.3)';
+  ctx.fillText('DM HALO CENTER', CX + rE * 0.7, CY - 8);
+  ctx.fillStyle = 'rgba(40,80,150,0.22)';
+  ctx.fillText('Einstein radius →', CX + rE * 0.5, CY + 16);
+}
+
+function drawRay(ray) {
+  if (ray.trail.length < 2) return;
+
+  // Draw glow underneath
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+
+  const [r,g,b] = ray.color;
+
+  // Outer glow
+  ctx.beginPath();
+  ctx.moveTo(ray.trail[0].x, ray.trail[0].y);
+  for (let i = 1; i < ray.trail.length; i++) {
+    ctx.lineTo(ray.trail[i].x, ray.trail[i].y);
+  }
+  ctx.strokeStyle = `rgba(${r},${g},${b},${(ray.alpha * 0.08).toFixed(3)})`;
+  ctx.lineWidth   = 5;
+  ctx.stroke();
+
+  // Mid glow
+  ctx.beginPath();
+  ctx.moveTo(ray.trail[0].x, ray.trail[0].y);
+  for (let i = 1; i < ray.trail.length; i++) {
+    ctx.lineTo(ray.trail[i].x, ray.trail[i].y);
+  }
+  ctx.strokeStyle = `rgba(${r},${g},${b},${(ray.alpha * 0.18).toFixed(3)})`;
+  ctx.lineWidth   = 2;
+  ctx.stroke();
+
+  // Core line
+  ctx.beginPath();
+  ctx.moveTo(ray.trail[0].x, ray.trail[0].y);
+  for (let i = 1; i < ray.trail.length; i++) {
+    ctx.lineTo(ray.trail[i].x, ray.trail[i].y);
+  }
+  ctx.strokeStyle = `rgba(${r},${g},${b},${(ray.alpha * 0.85).toFixed(3)})`;
+  ctx.lineWidth   = 0.8;
+  ctx.stroke();
+
+  // Leading photon dot
+  const tip = ray.trail[ray.trail.length - 1];
+  const tipGlow = ctx.createRadialGradient(tip.x,tip.y,0, tip.x,tip.y, 6);
+  tipGlow.addColorStop(0, `rgba(${r},${g},${b},${(ray.alpha * 0.9).toFixed(3)})`);
+  tipGlow.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = tipGlow;
+  ctx.beginPath(); ctx.arc(tip.x, tip.y, 6, 0, Math.PI*2); ctx.fill();
+}
+
+// Draw deflection angle annotation for a single central ray
+function drawDeflectionAnnotation() {
+  // Find the ray closest to Einstein radius
+  const rE   = getEinsteinR();
+  let best = null, bestDiff = Infinity;
+  for (const ray of rays) {
+    const diff = Math.abs(Math.abs(ray.impact) - rE);
+    if (diff < bestDiff && ray.trail.length > 100) { bestDiff = diff; best = ray; }
+  }
+  if (!best || best.trail.length < 150) return;
+
+  // Draw dashed straight reference line
+  const t0    = best.trail[0];
+  const tMid  = best.trail[Math.min(80, best.trail.length-1)];
+  const tEnd  = best.trail[best.trail.length-1];
+
+  // Incoming direction extended
+  const refEndX = t0.x + (tEnd.x - t0.x);
+  const refEndY = t0.y;  // straight horizontal
+
+  ctx.strokeStyle = 'rgba(255,200,80,0.25)';
+  ctx.lineWidth   = 0.8;
+  ctx.setLineDash([4,6]);
+  ctx.beginPath();
+  ctx.moveTo(t0.x, t0.y);
+  ctx.lineTo(refEndX + 40, refEndY);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Angle arc
+  if (tEnd.x > CX) {
+    const dy   = tEnd.y - t0.y;
+    const dx   = tEnd.x - t0.x;
+    const ang  = Math.atan2(dy, dx);
+    const arcR = 40;
+    ctx.strokeStyle = 'rgba(255,200,80,0.35)';
+    ctx.lineWidth   = 0.8;
+    ctx.beginPath();
+    ctx.arc(CX, t0.y, arcR, 0, ang, ang > 0);
+    ctx.stroke();
+
+    // Label
+    const midAng = ang / 2;
+    ctx.font      = '8px "Share Tech Mono", monospace';
+    ctx.fillStyle = 'rgba(255,200,80,0.55)';
+    ctx.fillText('δ', CX + arcR * Math.cos(midAng) + 6, t0.y + arcR * Math.sin(midAng) + 4);
+  }
+
+  // Max deflection readout
+  const maxDef = best.maxDeflect * 4000;
+  document.getElementById('r-def').textContent = maxDef.toFixed(2);
+}
+
+// Phase label based on where rays are
+function updatePhaseLabel() {
+  const progress = rays.filter(r => r.trail.length > 0)
+    .map(r => r.trail[r.trail.length-1]?.x ?? 0);
+  if (progress.length === 0) return;
+  const avgX = progress.reduce((a,b)=>a+b,0)/progress.length;
+  const el   = document.getElementById('phase-label');
+
+  if (avgX < CX - R200 * 0.8)        el.textContent = 'Light approaching dark matter halo';
+  else if (avgX < CX - R200 * 0.2)   el.textContent = 'Entering gravitational well — bending begins';
+  else if (avgX < CX + R200 * 0.2)   el.textContent = 'Maximum deflection zone — NFW core';
+  else if (avgX < CX + R200 * 0.8)   el.textContent = 'Exiting — path permanently altered';
+  else                                el.textContent = 'Light deflected — dark matter inferred from path';
+}
+
+// ══════════════════════════════════════════════════════
+//  MAIN LOOP
+// ══════════════════════════════════════════════════════
+function loop(t) {
+  ctx.fillStyle = '#000008';
+  ctx.fillRect(0, 0, W, H);
+
+  // Deep space gradient
+  const bg = ctx.createRadialGradient(CX, CY, 0, CX, CY, Math.max(W,H)*0.7);
+  bg.addColorStop(0,   'rgba(4,8,24,0.7)');
+  bg.addColorStop(0.5, 'rgba(2,4,12,0.4)');
+  bg.addColorStop(1,   'rgba(0,0,0,0)');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, W, H);
+
+  // Stars
+  drawStarField(t);
+
+  // DM halo (invisible — just darkness + annotations)
+  drawDMHalo();
+
+  // Integrate & draw rays
+  const stepsPerFrame = Math.max(1, Math.round(SPEED * 2));
+  for (let s = 0; s < stepsPerFrame; s++) {
+    for (const ray of rays) stepRay(ray);
+  }
+
+  for (const ray of rays) drawRay(ray);
+
+  // Deflection annotation
+  drawDeflectionAnnotation();
+
+  // Phase label
+  updatePhaseLabel();
+
+  globalT = t;
+
+  // Auto-reset when all rays are done
+  if (rays.every(r => r.done)) {
+    setTimeout(resetSim, 1800);
+    return;
+  }
+
+  animId = requestAnimationFrame(loop);
+}
+
+// ══════════════════════════════════════════════════════
+//  CONTROLS
+// ══════════════════════════════════════════════════════
+document.getElementById('sl-speed').addEventListener('input', function() {
+  SPEED = +this.value;
+  document.getElementById('v-speed').textContent = SPEED.toFixed(1) + '×';
+});
+document.getElementById('sl-mass').addEventListener('input', function() {
+  DM_MASS = +this.value;
+  document.getElementById('v-mass').textContent = DM_MASS;
+  document.getElementById('r-m').textContent = DM_MASS.toFixed(1) + '×10¹²';
+  document.getElementById('r-ein').textContent = (getEinsteinR()/10).toFixed(1);
+  resetSim();
+});
+document.getElementById('sl-rays').addEventListener('input', function() {
+  N_RAYS = +this.value;
+  document.getElementById('v-rays').textContent = N_RAYS;
+  resetSim();
+});
+document.getElementById('btn-reset').addEventListener('click', resetSim);
+
+// ══════════════════════════════════════════════════════
+//  BOOT
+// ══════════════════════════════════════════════════════
+genStars(500);
+resetSim();
+</script>
+</body>
+</html>
